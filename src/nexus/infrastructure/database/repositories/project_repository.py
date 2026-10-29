@@ -30,9 +30,15 @@ class SqlAlchemyProjectRepository(ProjectRepository):
         return self._to_domain(model)
 
     def save(self, project: Project) -> None:
-        model = self._to_model(project)
+        model = self.session.get(ProjectModel, project.id)
 
-        self.session.add(model)
+        if model is None:
+            model = self._to_model(project)
+            self.session.add(model)
+        else:
+            model.name = project.name
+            model.description = project.description
+            model.updated_at = project.updated_at
 
         try:
             self.session.commit()

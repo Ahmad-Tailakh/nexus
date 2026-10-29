@@ -1,3 +1,4 @@
+
 from uuid import UUID
 
 from nexus.application.environments.exceptions import EnvironmentNotFoundError
@@ -12,15 +13,16 @@ class CreateService:
         environment_repository: EnvironmentRepository,
         service_repository: ServiceRepository,
     ) -> None:
-        self.environment_repository = environment_repository
-        self.service_repository = service_repository
+        self._environment_repository = environment_repository
+        self._service_repository = service_repository
 
     def execute(
         self,
         environment_id: UUID,
         name: str,
+        repository_url: str | None = None,
     ) -> Service:
-        environment = self.environment_repository.get_by_id(environment_id)
+        environment = self._environment_repository.get_by_id(environment_id)
 
         if environment is None:
             raise EnvironmentNotFoundError()
@@ -28,8 +30,9 @@ class CreateService:
         service = Service(
             environment_id=environment.id,
             name=name,
+            repository_url=repository_url,
         )
 
-        self.service_repository.save(service)
+        self._service_repository.save(service)
 
         return service

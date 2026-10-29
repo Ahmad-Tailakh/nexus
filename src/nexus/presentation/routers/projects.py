@@ -1,12 +1,12 @@
-from uuid import UUID
-
+﻿from uuid import UUID
+from pydantic import BaseModel, Field, field_validator
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from nexus.application.projects.create_project import CreateProject
 from nexus.application.projects.delete_project import DeleteProject
 from nexus.application.projects.exceptions import (
+    ProjectHasEnvironmentsError,
     ProjectNameAlreadyExistsError,
     ProjectNotFoundError,
 )
@@ -16,43 +16,73 @@ from nexus.application.projects.rename_project import RenameProject
 from nexus.infrastructure.database.repositories.project_repository import (
     SqlAlchemyProjectRepository,
 )
-from nexus.presentation.dependencies import get_db_session
+from nexus.presentation.dependencies.db import get_db_session
+from nexus.infrastructure.database.repositories.environment_repository import (
+    SqlAlchemyEnvironmentRepository,
+)
 
-router = APIRouter(prefix="/projects", tags=["Projects"])
+
+router = APIRouter(
+    prefix="/projects",
+    tags=["Projects"],
+)
+
+
 
 
 class CreateProjectRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
 
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Project name must not be blank.")
+        return value
+
 
 class RenameProjectRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
 
 
-def serialize_project(project) -> dict[str, str | None]:
-    return {
-        "id": str(project.id),
-        "name": project.name,
-        "description": project.description,
-    }
+class ProjectResponse(BaseModel):
+    id: UUID
+    name: str
+    description: str | None = None
 
 
-@router.get("")
+def serialize_project(project) -> ProjectResponse:
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+    )
+
+
+@router.get(
+    "",
+    response_model=list[ProjectResponse],
+    status_code=status.HTTP_200_OK,
+)
 def list_projects(
     session: Session = Depends(get_db_session),
-) -> list[dict[str, str | None]]:
+) -> list[ProjectResponse]:
     repository = SqlAlchemyProjectRepository(session)
     projects = ListProjects(repository).execute()
 
     return [serialize_project(project) for project in projects]
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ProjectResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_project(
     request: CreateProjectRequest,
     session: Session = Depends(get_db_session),
-) -> dict[str, str | None]:
+) -> ProjectResponse:
     repository = SqlAlchemyProjectRepository(session)
 
     try:
@@ -69,15 +99,21 @@ def create_project(
     return serialize_project(project)
 
 
-@router.get("/{project_id}")
+@router.get(
+    "/{project_id}",
+    response_model=ProjectResponse,
+    status_code=status.HTTP_200_OK,
+)
 def get_project(
     project_id: UUID,
     session: Session = Depends(get_db_session),
-) -> dict[str, str | None]:
+) -> ProjectResponse:
     repository = SqlAlchemyProjectRepository(session)
 
     try:
-        project = GetProject(repository).execute(project_id=project_id)
+        project = GetProject(repository).execute(
+            project_id=project_id,
+        )
     except ProjectNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -87,18 +123,22 @@ def get_project(
     return serialize_project(project)
 
 
-@router.patch("/{project_id}")
+@router.patch(
+    "/{project_id}",
+    response_model=ProjectResponse,
+    status_code=status.HTTP_200_OK,
+)
 def rename_project(
     project_id: UUID,
     request: RenameProjectRequest,
     session: Session = Depends(get_db_session),
-) -> dict[str, str | None]:
+) -> ProjectResponse:
     repository = SqlAlchemyProjectRepository(session)
 
     try:
         project = RenameProject(repository).execute(
             project_id=project_id,
-            name=request.name,
+            new_name=request.name,
         )
     except ProjectNotFoundError as exc:
         raise HTTPException(
@@ -122,12 +162,23 @@ def delete_project(
     project_id: UUID,
     session: Session = Depends(get_db_session),
 ) -> None:
-    repository = SqlAlchemyProjectRepository(session)
+    project_repository = SqlAlchemyProjectRepository(session)
+    environment_repository = SqlAlchemyEnvironmentRepository(session)
 
     try:
-        DeleteProject(repository).execute(project_id=project_id)
+        DeleteProject(
+            project_repository=project_repository,
+            environment_repository=environment_repository,
+        ).execute(project_id=project_id)
+
     except ProjectNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    except ProjectHasEnvironmentsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc

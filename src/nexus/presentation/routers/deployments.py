@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from nexus.application.deployments.create_deployment import CreateDeployment
@@ -16,51 +17,69 @@ from nexus.infrastructure.database.repositories.deployment_repository import (
 from nexus.infrastructure.database.repositories.service_repository import (
     SqlAlchemyServiceRepository,
 )
-from nexus.presentation.dependencies import get_db_session
+from nexus.domain.deployments.exceptions import InvalidDeploymentTransitionError
+from nexus.presentation.dependencies.db import get_db_session
 
-router = APIRouter(prefix="/deployments", tags=["Deployments"])
+
+router = APIRouter(
+    prefix="/deployments",
+    tags=["Deployments"],
+)
 
 
 class CreateDeploymentRequest(BaseModel):
     service_id: UUID
 
 
-class RetryDeploymentRequest(BaseModel):
-    pass
+class DeploymentResponse(BaseModel):
+    id: UUID
+    service_id: UUID
+    status: str
 
 
-def serialize_deployment(deployment) -> dict[str, str]:
-    return {
-        "id": str(deployment.id),
-        "service_id": str(deployment.service_id),
-        "environment_id": str(deployment.environment_id),
-        "status": deployment.status.value
+def serialize_deployment(deployment) -> DeploymentResponse:
+    deployment_status = (
+        deployment.status.value
         if hasattr(deployment.status, "value")
-        else str(deployment.status),
-    }
+        else str(deployment.status)
+    )
 
+    return DeploymentResponse(
+        id=deployment.id,
+        service_id=deployment.service_id,
+        status=deployment_status,
+    )
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=DeploymentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_deployment(
     request: CreateDeploymentRequest,
     session: Session = Depends(get_db_session),
-) -> dict[str, str]:
+) -> DeploymentResponse:
     deployment_repository = SqlAlchemyDeploymentRepository(session)
     service_repository = SqlAlchemyServiceRepository(session)
 
     deployment = CreateDeployment(
         service_repository,
         deployment_repository,
-    ).execute(service_id=request.service_id)
+    ).execute(
+        service_id=request.service_id,
+    )
 
     return serialize_deployment(deployment)
 
 
-@router.get("/{deployment_id}")
+@router.get(
+    "/{deployment_id}",
+    response_model=DeploymentResponse,
+)
 def get_deployment(
     deployment_id: UUID,
     session: Session = Depends(get_db_session),
-) -> dict[str, str]:
+) -> DeploymentResponse:
     repository = SqlAlchemyDeploymentRepository(session)
 
     try:
@@ -75,6 +94,33 @@ def get_deployment(
 
     return serialize_deployment(deployment)
 
+
+@router.post(
+    "/{deployment_id}/retry",
+    response_model=DeploymentResponse,
+)
+def retry_failed_deployment(
+    deployment_id: UUID,
+    session: Session = Depends(get_db_session),
+) -> DeploymentResponse:
+    repository = SqlAlchemyDeploymentRepository(session)
+
+    try:
+        deployment = RetryFailedDeployment(repository).execute(
+            deployment_id=deployment_id,
+        )
+    except DeploymentNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except InvalidDeploymentTransitionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    return serialize_deployment(deployment)
 
 @router.delete(
     "/{deployment_id}",
@@ -95,23 +141,3 @@ def delete_deployment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
-
-
-@router.post("/{deployment_id}/retry")
-def retry_failed_deployment(
-    deployment_id: UUID,
-    session: Session = Depends(get_db_session),
-) -> dict[str, str]:
-    repository = SqlAlchemyDeploymentRepository(session)
-
-    try:
-        deployment = RetryFailedDeployment(repository).execute(
-            deployment_id=deployment_id,
-        )
-    except DeploymentNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
-
-    return serialize_deployment(deployment)

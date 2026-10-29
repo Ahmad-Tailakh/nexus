@@ -9,6 +9,7 @@ description = "Production-grade Python backend platform for application, environ
 requires-python = ">=3.12,<3.13"
 
 
+
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -17,6 +18,8 @@ dependencies = [
     "alembic",
     "python-dotenv",
     "marshmallow",
+    "pwdlib[argon2]",
+    "PyJWT>=2.10,<3",
 ]
 
 [project.optional-dependencies]
