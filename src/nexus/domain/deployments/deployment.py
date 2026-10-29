@@ -1,3 +1,4 @@
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
@@ -9,6 +10,10 @@ from .exceptions import (
 from .status import DeploymentStatus
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 @dataclass(kw_only=True)
 class Deployment:
     id: UUID = field(default_factory=uuid4)
@@ -18,17 +23,19 @@ class Deployment:
         init=False,
     )
     created_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=_utc_now,
         init=False,
     )
     updated_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=_utc_now,
         init=False,
     )
 
     def __post_init__(self) -> None:
         if not isinstance(self.service_id, UUID):
             raise InvalidDeploymentServiceIdError()
+
+        self.updated_at = self.created_at
 
     def start(self) -> None:
         if self.status != DeploymentStatus.PENDING:
@@ -59,4 +66,4 @@ class Deployment:
         self._touch()
 
     def _touch(self) -> None:
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = _utc_now()
